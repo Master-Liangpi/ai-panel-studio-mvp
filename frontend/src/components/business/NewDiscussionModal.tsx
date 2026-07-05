@@ -1,8 +1,3 @@
-// ============================================================
-// NewDiscussionModal — 新建圆桌弹窗
-// 表单：标题（必填）+ 议题（选填）→ POST /discussions
-// ============================================================
-
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Modal } from '../base/Modal'
@@ -65,7 +60,7 @@ export const NewDiscussionModal: React.FC<Props> = ({ visible, onClose }) => {
           className="form-textarea"
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
-          placeholder="简述讨论背景和核心议题…"
+          placeholder="简述讨论背景和核心问题"
           maxLength={2000}
           rows={3}
         />
@@ -75,7 +70,7 @@ export const NewDiscussionModal: React.FC<Props> = ({ visible, onClose }) => {
           disabled={!canSubmit}
           onClick={handleSubmit}
         >
-          {submitting ? '创建中…' : '创建讨论'}
+          {submitting ? '创建中...' : '创建讨论'}
         </button>
       </div>
     </Modal>

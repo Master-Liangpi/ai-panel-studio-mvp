@@ -1,9 +1,3 @@
-// ============================================================
-// SpeechTimeline — 发言时间线容器
-// 新发言自动滚到底部；用户手动上滚时暂停自动滚动；
-// 出现"↓ 回到最新"浮动按钮
-// ============================================================
-
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { ScrollPanel } from '../base/ScrollPanel'
 import { SpeechCard } from './SpeechCard'
@@ -11,7 +5,7 @@ import type { Speech } from '../../types'
 
 interface Props {
   speeches: Speech[]
-  streamingContent?: string | null    // 正在流式生成中的半成品文本
+  streamingContent?: string | null
   streamingSpeaker?: { name: string; color: string } | null
   streamingSeq?: number
 }
@@ -26,7 +20,6 @@ export const SpeechTimeline: React.FC<Props> = ({
   const [autoScroll, setAutoScroll] = useState(true)
   const [showBackBtn, setShowBackBtn] = useState(false)
 
-  // 用户手动滚动 → 暂停自动滚动
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
@@ -35,7 +28,6 @@ export const SpeechTimeline: React.FC<Props> = ({
     setShowBackBtn(!atBottom)
   }, [])
 
-  // 新发言到达 → 自动滚到底部
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -58,9 +50,7 @@ export const SpeechTimeline: React.FC<Props> = ({
         <div ref={scrollRef}>
           {isEmpty && (
             <div className="speech-timeline__empty">
-              <p className="speech-timeline__empty-text">
-                讨论即将开始，嘉宾正在准备…
-              </p>
+              <p className="speech-timeline__empty-text">讨论即将开始，嘉宾正在准备中...</p>
             </div>
           )}
 
@@ -68,7 +58,6 @@ export const SpeechTimeline: React.FC<Props> = ({
             <SpeechCard key={s.id} speech={s} />
           ))}
 
-          {/* 流式生成中的半成品 */}
           {streamingContent && streamingSpeaker && (
             <SpeechCard
               speech={{
@@ -87,10 +76,9 @@ export const SpeechTimeline: React.FC<Props> = ({
         </div>
       </ScrollPanel>
 
-      {/* 回到最新按钮 */}
       {showBackBtn && (
         <button className="speech-timeline__back-btn" onClick={scrollToBottom}>
-          ↓ 回到最新
+          回到最新
         </button>
       )}
     </div>

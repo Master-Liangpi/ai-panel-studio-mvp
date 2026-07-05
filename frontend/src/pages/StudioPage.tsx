@@ -1,10 +1,3 @@
-// ============================================================
-// StudioPage — 演播厅讨论页
-// 使用 useReducer 管理单场讨论的全部状态（多场互不干扰）
-// 挂载时获取初始数据 + 建立 SSE 连接
-// 卸载时关闭 SSE 连接，状态随组件销毁自动隔离
-// ============================================================
-
 import React, { useReducer, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { SseStatusBar } from '../components/base/SseStatusBar'
@@ -26,8 +19,7 @@ import type {
   ConsensusPoint,
   DivergencePoint,
 } from '../types'
-
-// ---- State & Action ----
+import { sanitizeDisplayText } from '../utils/text'
 
 interface StudioState {
   discussion: Discussion | null
@@ -90,7 +82,6 @@ function studioReducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
     case 'SET_DISCUSSION':
       return { ...state, discussion: action.payload }
-
     case 'SET_PANELISTS': {
       const items = action.payload.items.map((p) => ({
         ...p,
@@ -101,24 +92,18 @@ function studioReducer(state: StudioState, action: Action): StudioState {
       const experts = items.filter((p) => p.role === 'expert')
       return { ...state, panelists: items, host, experts }
     }
-
     case 'SET_SPEECHES':
       return { ...state, speeches: action.payload }
-
     case 'SET_CONSENSUS':
       return { ...state, consensus: action.payload }
-
     case 'SET_DIVERGENCE':
       return { ...state, divergence: action.payload }
-
     case 'SET_SSE_STATUS':
       return { ...state, sseStatus: action.payload }
-
     case 'SPEECH_CHUNK': {
       const { panelist_id, delta } = action.payload
       const wasFirstChunk = !state.streamingContent
       const newContent = (state.streamingContent || '') + delta
-      // 更新嘉宾状态为 speaking
       const updatedPanelists = state.panelists.map((p) =>
         p.id === panelist_id ? { ...p, ui_status: 'speaking' as PanelistStatus } : p
       )
@@ -135,10 +120,8 @@ function studioReducer(state: StudioState, action: Action): StudioState {
         panelists: updatedPanelists,
       }
     }
-
     case 'SPEECH_COMPLETE': {
       const speech = action.payload
-      // 恢复嘉宾状态为 idle
       const resetPanelists = state.panelists.map((p) =>
         p.id === speech.panelist_id ? { ...p, ui_status: 'idle' as PanelistStatus } : p
       )
@@ -151,68 +134,51 @@ function studioReducer(state: StudioState, action: Action): StudioState {
         streamingSeq: 0,
       }
     }
-
     case 'CONSENSUS_UPDATE': {
       const cp = action.payload
       const existing = state.consensus.findIndex((c) => c.id === cp.id)
-      let newConsensus: ConsensusPoint[]
-      if (existing >= 0) {
-        newConsensus = [...state.consensus]
-        newConsensus[existing] = cp
-      } else {
-        newConsensus = [...state.consensus, cp]
-      }
+      const newConsensus =
+        existing >= 0
+          ? state.consensus.map((c, index) => (index === existing ? cp : c))
+          : [...state.consensus, cp]
       const newHighlights = new Set(state.highlightIds)
       newHighlights.add(`consensus-${cp.id}`)
       return { ...state, consensus: newConsensus, highlightIds: newHighlights }
     }
-
     case 'DIVERGENCE_UPDATE': {
       const dp = action.payload
       if (dp.resolved) {
-        // 分歧消解：从列表中移除
         return {
           ...state,
           divergence: state.divergence.filter((d) => d.id !== dp.id),
         }
       }
       const existing = state.divergence.findIndex((d) => d.id === dp.id)
-      let newDiv: DivergencePoint[]
-      if (existing >= 0) {
-        newDiv = [...state.divergence]
-        newDiv[existing] = dp
-      } else {
-        newDiv = [...state.divergence, dp]
-      }
+      const newDiv =
+        existing >= 0
+          ? state.divergence.map((d, index) => (index === existing ? dp : d))
+          : [...state.divergence, dp]
       const newHighlights = new Set(state.highlightIds)
       newHighlights.add(`divergence-${dp.id}`)
       return { ...state, divergence: newDiv, highlightIds: newHighlights }
     }
-
     case 'GENERATING_START':
       return { ...state, generatingSpeech: true, error: null }
-
     case 'GENERATING_END':
       return { ...state, generatingSpeech: false }
-
     case 'SET_ERROR':
       return { ...state, error: action.payload, generatingSpeech: false }
-
     case 'SET_SUMMARY':
       return { ...state, summary: action.payload, showSummary: true }
-
     case 'CLEAR_HIGHLIGHT': {
       const newHighlights = new Set(state.highlightIds)
       newHighlights.delete(action.payload)
       return { ...state, highlightIds: newHighlights }
     }
-
     default:
       return state
   }
 }
-
-// ---- Component ----
 
 export const StudioPage: React.FC = () => {
   const { discussionId } = useParams<{ discussionId: string }>()
@@ -222,9 +188,8 @@ export const StudioPage: React.FC = () => {
   const [state, dispatch] = useReducer(studioReducer, undefined, initState)
   const closeSSERef = useRef<(() => void) | null>(null)
 
-  // ---- 初始化：拉取讨论数据 ----
   useEffect(() => {
-    if (!did || isNaN(did)) return
+    if (!did || Number.isNaN(did)) return
 
     let cancelled = false
 
@@ -261,12 +226,13 @@ export const StudioPage: React.FC = () => {
     }
 
     init()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [did, navigate])
 
-  // ---- SSE 连接 ----
   useEffect(() => {
-    if (!did || isNaN(did)) return
+    if (!did || Number.isNaN(did)) return
 
     dispatch({ type: 'SET_SSE_STATUS', payload: 'connecting' })
 
@@ -275,28 +241,22 @@ export const StudioPage: React.FC = () => {
         case '__connected__':
           dispatch({ type: 'SET_SSE_STATUS', payload: 'connected' })
           break
-
         case '__disconnected__':
           dispatch({ type: 'SET_SSE_STATUS', payload: 'disconnected' })
           break
-
         case 'speech.chunk':
           dispatch({ type: 'SPEECH_CHUNK', payload: data })
           break
-
         case 'speech.complete':
           dispatch({ type: 'SPEECH_COMPLETE', payload: data })
           dispatch({ type: 'GENERATING_END' })
           break
-
         case 'consensus.update':
           dispatch({ type: 'CONSENSUS_UPDATE', payload: data })
-          // 2 秒后清除高亮
           setTimeout(() => {
             dispatch({ type: 'CLEAR_HIGHLIGHT', payload: `consensus-${data.id}` })
           }, 2200)
           break
-
         case 'divergence.update':
           dispatch({ type: 'DIVERGENCE_UPDATE', payload: data })
           if (!data.resolved) {
@@ -305,30 +265,22 @@ export const StudioPage: React.FC = () => {
             }, 2200)
           }
           break
-
         case 'error':
           dispatch({ type: 'GENERATING_END' })
-          dispatch({
-            type: 'SET_ERROR',
-            payload: data.message || '实时推送异常',
-          })
+          dispatch({ type: 'SET_ERROR', payload: data.message || '实时推送异常' })
           break
-
         case 'heartbeat':
-          // 心跳对用户透明，仅保持连接
           break
       }
     })
 
     closeSSERef.current = close
-
     return () => {
       close()
       closeSSERef.current = null
     }
   }, [did])
 
-  // ---- 触发下一轮发言 ----
   const handleTriggerNext = useCallback(async () => {
     if (!did || state.generatingSpeech) return
     dispatch({ type: 'GENERATING_START' })
@@ -336,18 +288,15 @@ export const StudioPage: React.FC = () => {
       await speechApi.next(did)
     } catch (e: any) {
       dispatch({ type: 'GENERATING_END' })
-      const msg = e.message || '发言触发失败'
-      dispatch({ type: 'SET_ERROR', payload: msg })
+      dispatch({ type: 'SET_ERROR', payload: e.message || '发言触发失败' })
     }
   }, [did, state.generatingSpeech])
 
-  // ---- 生成总结 ----
   const handleGenerateSummary = useCallback(async () => {
     if (!did) return
     try {
       const res = await summaryApi.generate(did)
       dispatch({ type: 'SET_SUMMARY', payload: res.content })
-      // 更新讨论状态
       if (state.discussion) {
         dispatch({
           type: 'SET_DISCUSSION',
@@ -359,12 +308,10 @@ export const StudioPage: React.FC = () => {
     }
   }, [did, state.discussion])
 
-  // ---- SSE 重连 ----
   const handleReconnect = useCallback(() => {
     closeSSERef.current?.()
     dispatch({ type: 'SET_SSE_STATUS', payload: 'connecting' })
     const close = createSSEConnection(did, (event, data) => {
-      // 复用相同事件处理逻辑
       switch (event) {
         case '__connected__':
           dispatch({ type: 'SET_SSE_STATUS', payload: 'connected' })
@@ -398,17 +345,16 @@ export const StudioPage: React.FC = () => {
     closeSSERef.current = close
   }, [did])
 
-  // ---- 退出演播厅 ----
-  const handleBack = useCallback(() => {
-    navigate('/')
-  }, [navigate])
+  const safeDiscussionTitle = sanitizeDisplayText(
+    state.discussion?.title,
+    state.discussion ? `圆桌讨论 #${state.discussion.id}` : 'AI 圆桌讨论',
+  )
 
-  // ---- 渲染 ----
   return (
     <div className="studio-page">
       <div className="studio-topbar">
-        <button className="btn btn-ghost" onClick={handleBack}>
-          ← 返回首页
+        <button className="btn btn-ghost" onClick={() => navigate('/')}>
+          返回首页
         </button>
         <SseStatusBar status={state.sseStatus} onReconnect={handleReconnect} />
         {state.discussion && state.discussion.status !== 'completed' && state.speeches.length > 0 && (
@@ -417,7 +363,7 @@ export const StudioPage: React.FC = () => {
             onClick={handleGenerateSummary}
             disabled={state.generatingSpeech}
           >
-            📋 结束讨论并生成总结
+            结束讨论并生成总结
           </button>
         )}
       </div>
@@ -425,7 +371,7 @@ export const StudioPage: React.FC = () => {
       {state.error && (
         <div className="studio-toast studio-toast--error">
           <span>{state.error}</span>
-          <button onClick={() => dispatch({ type: 'SET_ERROR', payload: '' })}>✕</button>
+          <button onClick={() => dispatch({ type: 'SET_ERROR', payload: '' })}>x</button>
         </div>
       )}
 
@@ -441,21 +387,20 @@ export const StudioPage: React.FC = () => {
         streamingSpeaker={state.streamingSpeaker}
         streamingSeq={state.streamingSeq}
         generatingSpeech={state.generatingSpeech}
-        discussionTitle={state.discussion?.title || 'AI 圆桌讨论'}
+        discussionTitle={safeDiscussionTitle}
         onTriggerNext={handleTriggerNext}
       />
 
-      {/* 总结弹窗 */}
       {state.showSummary && state.summary && (
         <div className="summary-overlay" onClick={() => dispatch({ type: 'SET_SUMMARY', payload: '' })}>
           <div className="summary-modal" onClick={(e) => e.stopPropagation()}>
             <div className="summary-modal__header">
-              <h2>📋 讨论总结</h2>
+              <h2>讨论总结</h2>
               <button
                 className="modal-close"
                 onClick={() => dispatch({ type: 'SET_SUMMARY', payload: '' })}
               >
-                ✕
+                x
               </button>
             </div>
             <div

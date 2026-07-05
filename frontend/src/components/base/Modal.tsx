@@ -1,8 +1,3 @@
-// ============================================================
-// Modal — 通用弹窗
-// 入场 scale 动画 + 遮罩点击关闭 + ESC 关闭
-// ============================================================
-
 import React, { useEffect } from 'react'
 
 interface Props {
@@ -34,10 +29,7 @@ export const Modal: React.FC<Props> = ({
   if (!visible) return null
 
   return (
-    <div
-      className="modal-overlay"
-      onClick={maskClosable ? onClose : undefined}
-    >
+    <div className="modal-overlay" onClick={maskClosable ? onClose : undefined}>
       <div
         className="modal-content"
         style={{ width: `${width}px`, maxWidth: '90vw' }}
@@ -46,7 +38,7 @@ export const Modal: React.FC<Props> = ({
         <div className="modal-header">
           <h2 className="modal-title">{title}</h2>
           <button className="modal-close" onClick={onClose} aria-label="关闭">
-            ✕
+            x
           </button>
         </div>
         <div className="modal-body">{children}</div>

@@ -1,10 +1,3 @@
-// ============================================================
-// StudioLayout — 演播厅三栏布局壳
-// 宽屏: 三栏并排 (20% / 50% / 30%)
-// 平板: 上排左+中 / 下排右
-// 手机: 三 Tab 单栏切换
-// ============================================================
-
 import React, { useState } from 'react'
 import { useBreakpoint } from '../base/ResponsiveShell'
 import { ScrollPanel } from '../base/ScrollPanel'
@@ -50,13 +43,12 @@ export const StudioLayout: React.FC<Props> = ({
 
   const sortedPanelists = [...(host ? [host] : []), ...experts]
 
-  // ---- 左栏：嘉宾区 ----
   const leftPanel = (
     <div className="studio-panel studio-panel--left">
       <h3 className="studio-panel__title">👥 嘉宾席</h3>
       <ScrollPanel className="studio-panel__scroll">
         {panelists.length === 0 ? (
-          <p className="studio-panel__empty">暂无嘉宾，请先生成阵容</p>
+          <p className="studio-panel__empty">暂无嘉宾，请先生成嘉宾阵容</p>
         ) : (
           sortedPanelists.map((p) => <PanelistWindow key={p.id} panelist={p} />)
         )}
@@ -64,7 +56,6 @@ export const StudioLayout: React.FC<Props> = ({
     </div>
   )
 
-  // ---- 中栏：发言区 ----
   const centerPanel = (
     <div className="studio-panel studio-panel--center">
       <div className="studio-panel__title-row">
@@ -82,13 +73,12 @@ export const StudioLayout: React.FC<Props> = ({
           disabled={generatingSpeech || panelists.length === 0}
           onClick={onTriggerNext}
         >
-          {generatingSpeech ? '⏳ 嘉宾思考中…' : '🎤 下一轮发言'}
+          {generatingSpeech ? '嘉宾思考中...' : '🎤 下一轮发言'}
         </button>
       </div>
     </div>
   )
 
-  // ---- 右栏：共识 + 分歧 ----
   const rightPanel = (
     <div className="studio-panel studio-panel--right">
       <ConsensusList items={consensus} highlightIds={highlightIds} />
@@ -97,7 +87,6 @@ export const StudioLayout: React.FC<Props> = ({
     </div>
   )
 
-  // ---- 宽屏：三栏并排 ----
   if (bp === 'wide') {
     return (
       <div className="studio-layout studio-layout--wide">
@@ -108,7 +97,6 @@ export const StudioLayout: React.FC<Props> = ({
     )
   }
 
-  // ---- 平板：上排左+中 / 下排右 ----
   if (bp === 'medium') {
     return (
       <div className="studio-layout studio-layout--medium">
@@ -121,7 +109,6 @@ export const StudioLayout: React.FC<Props> = ({
     )
   }
 
-  // ---- 手机：三 Tab 切换 ----
   return (
     <div className="studio-layout studio-layout--narrow">
       <div className="mobile-tabs">
@@ -141,7 +128,7 @@ export const StudioLayout: React.FC<Props> = ({
           className={`mobile-tab ${mobileTab === 'insights' ? 'mobile-tab--active' : ''}`}
           onClick={() => setMobileTab('insights')}
         >
-          📊 共识
+          📌 洞察
         </button>
       </div>
       <div className="mobile-content">

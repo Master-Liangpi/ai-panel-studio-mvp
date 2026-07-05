@@ -1,7 +1,3 @@
-// ============================================================
-// DivergenceList — 分歧列表
-// ============================================================
-
 import React from 'react'
 import { ScrollPanel } from '../base/ScrollPanel'
 import { DivergenceItem } from './DivergenceItem'

@@ -1,19 +1,15 @@
-// ============================================================
-// DiscussionCard — 首页讨论卡片
-// 展示：标题 / 议题摘要 / 状态标签 / 嘉宾头像 / 发言数 / 更新时间
-// ============================================================
-
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Discussion } from '../../types'
+import { sanitizeDisplayText } from '../../utils/text'
 
 interface Props {
   discussion: Discussion
 }
 
 const STATUS_MAP: Record<string, { label: string; className: string }> = {
-  active:    { label: '进行中', className: 'tag-active' },
-  paused:    { label: '已暂停', className: 'tag-paused' },
+  active: { label: '进行中', className: 'tag-active' },
+  paused: { label: '已暂停', className: 'tag-paused' },
   completed: { label: '已结束', className: 'tag-completed' },
 }
 
@@ -33,27 +29,22 @@ function formatTime(isoStr: string): string {
 export const DiscussionCard: React.FC<Props> = ({ discussion }) => {
   const navigate = useNavigate()
   const statusCfg = STATUS_MAP[discussion.status] || STATUS_MAP.active
+  const safeTitle = sanitizeDisplayText(discussion.title, `未命名讨论 #${discussion.id}`)
+  const safeTopic = sanitizeDisplayText(discussion.topic, '')
 
   return (
-    <div
-      className="discussion-card"
-      onClick={() => navigate(`/studio/${discussion.id}`)}
-    >
+    <div className="discussion-card" onClick={() => navigate(`/studio/${discussion.id}`)}>
       <div className="discussion-card__header">
-        <h3 className="discussion-card__title">{discussion.title}</h3>
+        <h3 className="discussion-card__title">{safeTitle}</h3>
         <span className={`discussion-card__tag ${statusCfg.className}`}>
           {statusCfg.label}
         </span>
       </div>
-      {discussion.topic && (
-        <p className="discussion-card__topic">{discussion.topic}</p>
-      )}
+      {safeTopic && <p className="discussion-card__topic">{safeTopic}</p>}
       <div className="discussion-card__meta">
         <span>👥 {discussion.panelist_count} 位嘉宾</span>
         <span>💬 {discussion.speech_count} 条发言</span>
-        <span className="discussion-card__time">
-          {formatTime(discussion.updated_at)}
-        </span>
+        <span className="discussion-card__time">{formatTime(discussion.updated_at)}</span>
       </div>
     </div>
   )

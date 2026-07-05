@@ -1,8 +1,3 @@
-// ============================================================
-// HomePage — 首页
-// 历史讨论卡片网格 + 新建圆桌按钮
-// ============================================================
-
 import React, { useEffect, useState } from 'react'
 import { DiscussionCard } from '../components/business/DiscussionCard'
 import { NewDiscussionModal } from '../components/business/NewDiscussionModal'
@@ -23,27 +18,27 @@ export const HomePage: React.FC = () => {
           <span className="home-header__logo">🎙️</span>
           <h1 className="home-header__title">AI Panel Studio</h1>
         </div>
-        <p className="home-header__subtitle">沉浸式 AI 圆桌演播厅</p>
+        <p className="home-header__subtitle">沉浸式 AI 圆桌讨论演播厅</p>
       </header>
 
       <div className="home-actions">
         <button className="btn btn-primary btn-lg" onClick={() => setShowModal(true)}>
-          ＋ 新建圆桌
+          + 新建圆桌
         </button>
       </div>
 
       <section className="home-grid-section">
         {loading && items.length === 0 ? (
           <div className="home-empty">
-            <p>加载中…</p>
+            <p>加载中...</p>
           </div>
         ) : items.length === 0 ? (
           <div className="home-empty">
-            <div className="home-empty__icon">🎬</div>
+            <div className="home-empty__icon">🪑</div>
             <h3>还没有圆桌讨论</h3>
-            <p>创建你的第一场 AI 圆桌讨论，邀请虚拟嘉宾展开深度对话</p>
+            <p>创建你的第一场 AI 圆桌讨论，邀请虚拟嘉宾展开深度对话。</p>
             <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-              ＋ 创建第一场讨论
+              + 创建第一场讨论
             </button>
           </div>
         ) : (

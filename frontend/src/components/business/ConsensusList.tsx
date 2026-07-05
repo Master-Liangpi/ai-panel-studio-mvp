@@ -1,7 +1,3 @@
-// ============================================================
-// ConsensusList — 共识列表
-// ============================================================
-
 import React from 'react'
 import { ScrollPanel } from '../base/ScrollPanel'
 import { ConsensusItem } from './ConsensusItem'

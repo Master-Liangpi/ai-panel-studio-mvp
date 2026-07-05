@@ -1,7 +1,3 @@
-// ============================================================
-// ConsensusItem — 单条共识条目
-// ============================================================
-
 import React from 'react'
 import { HighlightText } from '../base/HighlightText'
 import type { ConsensusPoint } from '../../types'

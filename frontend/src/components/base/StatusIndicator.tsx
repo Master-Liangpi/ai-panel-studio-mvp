@@ -1,8 +1,3 @@
-// ============================================================
-// StatusIndicator — 嘉宾状态指示灯
-// idle=灰色常亮 / preparing=黄色慢脉冲 / speaking=绿色呼吸+声纹
-// ============================================================
-
 import React from 'react'
 import type { PanelistStatus } from '../../types'
 
@@ -12,10 +7,10 @@ interface Props {
 }
 
 const STATUS_CONFIG: Record<PanelistStatus, { color: string; label: string; className: string }> = {
-  idle:       { color: '#95A5A6', label: '待机',   className: 'status-idle' },
-  preparing:  { color: '#F39C12', label: '准备中', className: 'status-preparing' },
-  speaking:   { color: '#27AE60', label: '发言中', className: 'status-speaking' },
-  offline:    { color: 'transparent', label: '已离场', className: 'status-offline' },
+  idle: { color: '#95A5A6', label: '待机', className: 'status-idle' },
+  preparing: { color: '#F39C12', label: '准备中', className: 'status-preparing' },
+  speaking: { color: '#27AE60', label: '发言中', className: 'status-speaking' },
+  offline: { color: 'transparent', label: '已离线', className: 'status-offline' },
 }
 
 export const StatusIndicator: React.FC<Props> = ({ status, size = 8 }) => {

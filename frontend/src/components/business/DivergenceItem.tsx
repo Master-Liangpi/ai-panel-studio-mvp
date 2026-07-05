@@ -1,7 +1,3 @@
-// ============================================================
-// DivergenceItem — 单条分歧条目
-// ============================================================
-
 import React from 'react'
 import { HighlightText } from '../base/HighlightText'
 import type { DivergencePoint } from '../../types'
@@ -21,9 +17,7 @@ export const DivergenceItem: React.FC<Props> = ({ divergence, highlight }) => {
           {divergence.resolved && <span className="insight-item__resolved-tag">已消解</span>}
         </div>
         <p className="insight-item__content">{divergence.content}</p>
-        {divergence.sides && (
-          <p className="insight-item__sides">{divergence.sides}</p>
-        )}
+        {divergence.sides && <p className="insight-item__sides">{divergence.sides}</p>}
         <span className="insight-item__time">
           {new Date(divergence.updated_at).toLocaleTimeString('zh-CN', {
             hour: '2-digit',

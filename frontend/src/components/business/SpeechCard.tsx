@@ -1,15 +1,10 @@
-// ============================================================
-// SpeechCard — 单条发言卡片
-// 左侧 4px 色条 + 发言人姓名 + 正文 + 相对时间
-// 新发言 slideUp 入场动画
-// ============================================================
-
 import React from 'react'
 import type { Speech } from '../../types'
+import { sanitizeDisplayText } from '../../utils/text'
 
 interface Props {
   speech: Speech
-  isStreaming?: boolean  // 流式生成中的半成品
+  isStreaming?: boolean
 }
 
 function formatRelativeTime(isoStr: string): string {
@@ -26,13 +21,15 @@ function formatRelativeTime(isoStr: string): string {
 }
 
 export const SpeechCard: React.FC<Props> = ({ speech, isStreaming = false }) => {
+  const speakerName = sanitizeDisplayText(speech.panelist_name, '匿名嘉宾')
+
   return (
     <div className={`speech-card ${isStreaming ? 'speech-card--streaming' : ''}`}>
       <div className="speech-card__color-bar" style={{ backgroundColor: speech.panelist_color }} />
       <div className="speech-card__body">
         <div className="speech-card__header">
           <span className="speech-card__speaker" style={{ color: speech.panelist_color }}>
-            {speech.panelist_name}
+            {speakerName}
           </span>
           <span className="speech-card__seq">#{speech.sequence_num}</span>
         </div>
