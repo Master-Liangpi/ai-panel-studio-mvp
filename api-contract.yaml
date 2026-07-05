@@ -1,0 +1,1322 @@
+openapi: "3.0.3"
+info:
+  title: AI Panel Studio API
+  description: |
+    AI 圆桌演播厅后端接口契约。前后端分离架构，DeepSeek 大模型密钥仅存于后端环境变量 `DEEPSEEK_API_KEY`，
+    前端**不得**直接调用大模型，一切 AI 能力通过本接口间接调用。
+
+    ## 核心约定
+    - **讨论隔离**：除创建讨论和全局列表外，所有接口入参必须携带 `discussion_id`，路径中显式声明。
+    - **实时推送**：SSE 端点（`/stream`）负责推送三类事件——`speech.*`、`consensus.*`、`divergence.*`，客户端保持一条长连接即可。
+    - **增量共识**：每触发一次新发言，后端自动调用 DeepSeek 分析 → 新增/更新共识与分歧 → 通过 SSE 推送变更，不等整场结束。
+    - **制表示**：所有时间字段返回 ISO 8601 / RFC 3339 格式。
+
+    ## 认证
+    当前版本为内部开发阶段，暂不启用认证；生产部署前需追加 Bearer Token 或 API Key 校验。
+  version: "1.0.0"
+  contact:
+    name: AI Panel Studio Team
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: 本地开发环境
+
+tags:
+  - name: Discussions
+    description: 讨论会话（CRUD）
+  - name: Panelists
+    description: 参会嘉宾（生成与维护）
+  - name: Streaming
+    description: SSE 实时推送 + 发言触发
+  - name: Consensus & Divergence
+    description: 共识与分歧查询
+  - name: Summary
+    description: 圆桌收尾总结
+
+# ============================================================
+# 可复用组件
+# ============================================================
+components:
+
+  schemas:
+    # ---------- 讨论 ----------
+    Discussion:
+      type: object
+      required: [id, title, status, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          description: 讨论会话唯一主键
+          example: 42
+        title:
+          type: string
+          description: 讨论标题
+          example: "AI 监管应由政府主导还是行业自律？"
+        topic:
+          type: string
+          description: 议题简述
+          example: "围绕 AI 安全与创新平衡，探讨监管主体的最优选择"
+        status:
+          type: string
+          enum: [active, paused, completed]
+          description: "active=进行中, paused=已暂停, completed=已结束"
+          example: active
+        panelist_count:
+          type: integer
+          description: 嘉宾人数（聚合字段，查询时计算）
+          example: 5
+        speech_count:
+          type: integer
+          description: 已发言条数（聚合字段，查询时计算）
+          example: 28
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-07-05T14:30:00+08:00"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-07-05T15:22:10+08:00"
+
+    DiscussionCreateRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 讨论标题
+          example: "AI 监管应由政府主导还是行业自律？"
+        topic:
+          type: string
+          maxLength: 2000
+          description: 议题简述，可选
+          example: "围绕 AI 安全与创新平衡，探讨监管主体的最优选择"
+
+    DiscussionUpdateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        topic:
+          type: string
+          maxLength: 2000
+        status:
+          type: string
+          enum: [active, paused, completed]
+
+    DiscussionListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Discussion"
+        total:
+          type: integer
+          example: 12
+
+    # ---------- 嘉宾 ----------
+    Panelist:
+      type: object
+      required: [id, discussion_id, name, role, color, created_at]
+      properties:
+        id:
+          type: integer
+          example: 101
+        discussion_id:
+          type: integer
+          example: 42
+        name:
+          type: string
+          description: 嘉宾姓名
+          example: "张维德"
+        title:
+          type: string
+          description: 职业头衔
+          example: "AI 伦理研究中心主任"
+        stance:
+          type: string
+          description: 自身立场
+          example: "主张政府主导立法，建立统一安全标准"
+        color:
+          type: string
+          pattern: "^#[0-9A-Fa-f]{6}$"
+          description: 专属标识色（Hex）
+          example: "#E74C3C"
+        role:
+          type: string
+          enum: [host, expert]
+          description: "host=主持人, expert=专家"
+          example: expert
+        avatar_url:
+          type: string
+          nullable: true
+          format: uri
+          example: "https://cdn.example.com/avatars/zhang.png"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-07-05T14:30:05+08:00"
+
+    PanelistGenerateRequest:
+      type: object
+      required: [count]
+      properties:
+        count:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: 要生成的嘉宾人数（含主持人）
+          example: 5
+        topic_override:
+          type: string
+          description: 临时覆盖议题描述，不传则沿用讨论的 topic
+          example: "重点讨论监管与创新的平衡"
+
+    PanelistCreateRequest:
+      type: object
+      required: [name, role]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "李思远"
+        title:
+          type: string
+          maxLength: 200
+          example: "前科技部政策顾问"
+        stance:
+          type: string
+          maxLength: 1000
+          example: "认为行业自律更灵活，过度立法会扼杀创新"
+        color:
+          type: string
+          pattern: "^#[0-9A-Fa-f]{6}$"
+          example: "#3498DB"
+        role:
+          type: string
+          enum: [host, expert]
+          example: expert
+        avatar_url:
+          type: string
+          format: uri
+
+    PanelistListResponse:
+      type: object
+      required: [items, host, experts]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Panelist"
+        host:
+          $ref: "#/components/schemas/Panelist"
+          description: 主持人（单取方便前端布局）
+          nullable: true
+        experts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Panelist"
+          description: 专家列表
+
+    # ---------- 发言 ----------
+    Speech:
+      type: object
+      required: [id, discussion_id, panelist_id, content, sequence_num, created_at]
+      properties:
+        id:
+          type: integer
+          example: 1001
+        discussion_id:
+          type: integer
+          example: 42
+        panelist_id:
+          type: integer
+          example: 101
+        panelist_name:
+          type: string
+          description: 冗余发言人姓名，避免前端二次查询
+          example: "张维德"
+        panelist_color:
+          type: string
+          description: 冗余标识色
+          example: "#E74C3C"
+        content:
+          type: string
+          description: 发言原话
+          example: "我认为政府监管是底线保障。行业自律固然重要，但当商业利益与公共安全冲突时，没有法律强制力是远远不够的。"
+        sequence_num:
+          type: integer
+          description: 讨论内发言序号（1-based）
+          example: 12
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-07-05T14:45:30+08:00"
+
+    SpeechNextRequest:
+      type: object
+      properties:
+        prompt_hint:
+          type: string
+          maxLength: 2000
+          description: 给下一轮发言的提示/引导方向，不传则由主持人角色自动推进
+          example: "请嘉宾针对监管成本问题发表看法"
+
+    SpeechListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Speech"
+        total:
+          type: integer
+          example: 28
+
+    # ---------- 共识 ----------
+    ConsensusPoint:
+      type: object
+      required: [id, discussion_id, topic, content, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          example: 1
+        discussion_id:
+          type: integer
+          example: 42
+        topic:
+          type: string
+          example: "AI 安全是共同前提"
+        content:
+          type: string
+          example: "全体嘉宾一致认同：无论监管模式如何，AI 系统的安全性是不可退让的底线。各方均同意建立AI安全评估框架作为后续讨论的基础。"
+        latest_speech_id:
+          type: integer
+          nullable: true
+          example: 1024
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ConsensusListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConsensusPoint"
+        total:
+          type: integer
+
+    # ---------- 分歧 ----------
+    DivergencePoint:
+      type: object
+      required: [id, discussion_id, topic, content, sides, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          example: 1
+        discussion_id:
+          type: integer
+          example: 42
+        topic:
+          type: string
+          example: "监管手段：立法 vs 自律"
+        content:
+          type: string
+          example: "张维德主张通过立法建立强制标准，李思远则认为行业自律更灵活高效。双方在'是否需要法律强制力'上存在根本分歧。"
+        sides:
+          type: string
+          example: "立法派：张维德、王敏 / 自律派：李思远、陈浩然"
+        latest_speech_id:
+          type: integer
+          nullable: true
+          example: 1030
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DivergenceListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DivergencePoint"
+        total:
+          type: integer
+
+    # ---------- 总结 ----------
+    SummaryResponse:
+      type: object
+      required: [discussion_id, content, generated_at]
+      properties:
+        discussion_id:
+          type: integer
+          example: 42
+        content:
+          type: string
+          description: Markdown 格式的总结全文
+          example: |
+            ## 讨论总结：AI 监管应由政府主导还是行业自律？
+
+            ### 核心共识
+            1. **AI 安全是底线**：全体嘉宾一致认同安全不可退让
+            2. **混合模式最可行**：立法设定底线 + 行业自律制定最佳实践
+
+            ### 主要分歧
+            1. **监管力度**：张维德主张强监管，李思远主张轻监管
+            ...
+
+            ### 后续建议
+            - 建议成立跨部门 AI 安全联合工作组
+            ...
+        generated_at:
+          type: string
+          format: date-time
+          example: "2026-07-05T16:00:00+08:00"
+
+    # ---------- SSE 事件 ----------
+    SSEEvent:
+      type: object
+      description: |
+        SSE 推送的通用事件外壳。`event:` 行标识事件类型，`data:` 行承载 JSON payload。
+
+        **事件类型一览：**
+        | event 名称 | 触发时机 | payload schema |
+        |---|---|---|
+        | `speech.chunk` | AI 生成发言中的逐 token 流式输出 | SSEChunkPayload |
+        | `speech.complete` | 一句完整发言生成完毕 | Speech |
+        | `consensus.update` | 共识新增或被更新 | ConsensusPoint |
+        | `divergence.update` | 分歧新增或被更新 | DivergencePoint |
+        | `error` | 流内异常（生成失败等） | SSEErrorPayload |
+        | `heartbeat` | 每 15 秒无业务事件时发送 | null（空 data） |
+
+    SSEChunkPayload:
+      type: object
+      required: [sequence_num, delta]
+      properties:
+        sequence_num:
+          type: integer
+          description: 当前正在生成的发言序号
+        delta:
+          type: string
+          description: 增量文本片段（token）
+        panelist_id:
+          type: integer
+
+    SSEErrorPayload:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: "AI_GENERATION_FAILED"
+        message:
+          type: string
+          example: "DeepSeek 生成发言超时，请重试"
+
+    # ---------- 通用错误 ----------
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: 机器可读错误码
+        message:
+          type: string
+          description: 人类可读错误描述
+        detail:
+          type: string
+          description: 额外调试信息（仅开发环境返回）
+
+  # ---------- 公共参数 ----------
+  parameters:
+    DiscussionIdPath:
+      name: discussion_id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: 讨论会话 ID
+      example: 42
+
+    PanelistIdPath:
+      name: panelist_id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: 嘉宾 ID
+      example: 101
+
+# ============================================================
+# 路径定义
+# ============================================================
+paths:
+
+  # ==========================================================
+  # 1. 讨论会话
+  # ==========================================================
+  /discussions:
+    post:
+      tags: [Discussions]
+      summary: 新建讨论会话
+      description: 创建一个空的讨论会话（初始 status=active），嘉宾需后续通过 Panelist 接口添加。
+      operationId: createDiscussion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiscussionCreateRequest"
+            examples:
+              minimal:
+                summary: 最少参数
+                value:
+                  title: "AI 监管应由政府主导还是行业自律？"
+              full:
+                summary: 带议题描述
+                value:
+                  title: "AI 监管应由政府主导还是行业自律？"
+                  topic: "围绕 AI 安全与创新平衡，探讨监管主体的最优选择"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Discussion"
+              example:
+                id: 42
+                title: "AI 监管应由政府主导还是行业自律？"
+                topic: "围绕 AI 安全与创新平衡，探讨监管主体的最优选择"
+                status: active
+                panelist_count: 0
+                speech_count: 0
+                created_at: "2026-07-05T14:30:00+08:00"
+                updated_at: "2026-07-05T14:30:00+08:00"
+        "400":
+          description: 参数校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                empty_title:
+                  summary: 标题为空
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "讨论标题不能为空"
+                title_too_long:
+                  summary: 标题超长
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "讨论标题长度不能超过 200 个字符"
+
+    get:
+      tags: [Discussions]
+      summary: 查询讨论列表
+      description: 分页返回所有讨论会话，按更新时间倒序。不传分页参数时默认返回前 20 条。
+      operationId: listDiscussions
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, paused, completed]
+          description: 按状态筛选
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscussionListResponse"
+              example:
+                items:
+                  - id: 42
+                    title: "AI 监管应由政府主导还是行业自律？"
+                    status: active
+                    panelist_count: 5
+                    speech_count: 28
+                    created_at: "2026-07-05T14:30:00+08:00"
+                    updated_at: "2026-07-05T15:22:10+08:00"
+                  - id: 38
+                    title: "量子计算何时能落地商用？"
+                    status: paused
+                    panelist_count: 4
+                    speech_count: 15
+                    created_at: "2026-07-04T09:00:00+08:00"
+                    updated_at: "2026-07-04T10:45:00+08:00"
+                total: 2
+
+  /discussions/{discussion_id}:
+    get:
+      tags: [Discussions]
+      summary: 查询单场讨论详情
+      operationId: getDiscussion
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Discussion"
+        "404":
+          description: 讨论不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "DISCUSSION_NOT_FOUND"
+                message: "discussion_id=999 对应的讨论不存在"
+
+    patch:
+      tags: [Discussions]
+      summary: 更新讨论信息
+      description: 可部分更新（title / topic / status）。仅传入需要变更的字段。
+      operationId: updateDiscussion
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiscussionUpdateRequest"
+            examples:
+              change_status:
+                summary: 结束讨论
+                value:
+                  status: completed
+              rename:
+                summary: 修改标题
+                value:
+                  title: "AI 监管：政府 vs 行业（修订）"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Discussion"
+        "400":
+          description: 校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_status:
+                  summary: 无效状态值
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "status 必须是 active / paused / completed 之一"
+        "404":
+          description: 讨论不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [Discussions]
+      summary: 删除讨论（级联删除所有嘉宾、发言、共识、分歧）
+      operationId: deleteDiscussion
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "204":
+          description: 删除成功，无返回体
+        "404":
+          description: 讨论不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ==========================================================
+  # 2. 嘉宾阵容
+  # ==========================================================
+  /discussions/{discussion_id}/panelists/generate:
+    post:
+      tags: [Panelists]
+      summary: AI 生成嘉宾阵容
+      description: |
+        调用 DeepSeek 根据讨论议题自动生成嘉宾名单（含主持人 1 名 + 专家 N-1 名），
+        每人自动分配专属标识色和立场。生成完成后批量入库并返回。
+      operationId: generatePanelists
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PanelistGenerateRequest"
+            example:
+              count: 5
+              topic_override: "重点讨论监管与创新的平衡"
+      responses:
+        "201":
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelistListResponse"
+              example:
+                host:
+                  id: 100
+                  discussion_id: 42
+                  name: "陈主持"
+                  title: "资深科技媒体人"
+                  stance: "中立主持，引导各方充分表达"
+                  color: "#E67E22"
+                  role: host
+                  created_at: "2026-07-05T14:31:00+08:00"
+                experts:
+                  - id: 101
+                    discussion_id: 42
+                    name: "张维德"
+                    title: "AI 伦理研究中心主任"
+                    stance: "主张政府主导立法，建立统一安全标准"
+                    color: "#E74C3C"
+                    role: expert
+                    created_at: "2026-07-05T14:31:00+08:00"
+                  - id: 102
+                    discussion_id: 42
+                    name: "李思远"
+                    title: "前科技部政策顾问"
+                    stance: "认为行业自律更灵活，过度立法会扼杀创新"
+                    color: "#3498DB"
+                    role: expert
+                    created_at: "2026-07-05T14:31:00+08:00"
+                  - id: 103
+                    discussion_id: 42
+                    name: "王敏"
+                    title: "网络安全法起草参与者"
+                    stance: "立法是兜底机制，但需给行业留出试错空间"
+                    color: "#2ECC71"
+                    role: expert
+                    created_at: "2026-07-05T14:31:00+08:00"
+                  - id: 104
+                    discussion_id: 42
+                    name: "陈浩然"
+                    title: "AI 创业公司 CTO"
+                    stance: "反对过度监管，主张用市场机制筛选安全方案"
+                    color: "#9B59B6"
+                    role: expert
+                    created_at: "2026-07-05T14:31:00+08:00"
+                items: []
+        "400":
+          description: 参数校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                count_out_of_range:
+                  summary: 嘉宾数量超限
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "嘉宾人数必须在 1~10 之间"
+        "404":
+          description: 讨论不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: DeepSeek 调用失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "AI_SERVICE_UNAVAILABLE"
+                message: "DeepSeek 服务暂时不可用，请稍后重试"
+                detail: "Connection timeout after 30s"
+
+  /discussions/{discussion_id}/panelists:
+    get:
+      tags: [Panelists]
+      summary: 查询嘉宾列表
+      operationId: listPanelists
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelistListResponse"
+        "404":
+          description: 讨论不存在
+
+    post:
+      tags: [Panelists]
+      summary: 手动添加嘉宾
+      description: 在 AI 生成之外，手动追加单个嘉宾。
+      operationId: addPanelist
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PanelistCreateRequest"
+            example:
+              name: "赵明远"
+              title: "欧盟 AI 法案研究专家"
+              stance: "参考欧盟经验，分段分级监管是最佳路径"
+              color: "#1ABC9C"
+              role: expert
+      responses:
+        "201":
+          description: 添加成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Panelist"
+        "400":
+          description: 校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missing_name:
+                  summary: 缺少姓名
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "嘉宾姓名不能为空"
+                invalid_role:
+                  summary: 无效角色
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "role 必须是 host 或 expert"
+                duplicate_host:
+                  summary: 重复主持人
+                  value:
+                    code: "BUSINESS_CONFLICT"
+                    message: "每场讨论只能有一位主持人"
+        "404":
+          description: 讨论不存在
+
+  /discussions/{discussion_id}/panelists/{panelist_id}:
+    patch:
+      tags: [Panelists]
+      summary: 修改嘉宾信息
+      operationId: updatePanelist
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+        - $ref: "#/components/parameters/PanelistIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                title:
+                  type: string
+                stance:
+                  type: string
+                color:
+                  type: string
+                  pattern: "^#[0-9A-Fa-f]{6}$"
+                role:
+                  type: string
+                  enum: [host, expert]
+                avatar_url:
+                  type: string
+                  format: uri
+            example:
+              stance: "经讨论后立场有所调整：接受有限度的立法监管"
+              color: "#C0392B"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Panelist"
+        "400":
+          description: 校验失败
+        "404":
+          description: 讨论或嘉宾不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                panelist_not_in_discussion:
+                  summary: 嘉宾不属于该讨论
+                  value:
+                    code: "PANELIST_NOT_FOUND"
+                    message: "discussion_id=42 中不存在 panelist_id=999"
+
+    delete:
+      tags: [Panelists]
+      summary: 移除嘉宾
+      description: 删除嘉宾，其历史发言保留（panelist_id 置为 NULL，发言内容不丢失）。
+      operationId: deletePanelist
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+        - $ref: "#/components/parameters/PanelistIdPath"
+      responses:
+        "204":
+          description: 删除成功
+        "404":
+          description: 讨论或嘉宾不存在
+
+  # ==========================================================
+  # 3. SSE 实时推送 + 发言触发
+  # ==========================================================
+  /discussions/{discussion_id}/stream:
+    get:
+      tags: [Streaming]
+      summary: SSE 实时消息流
+      description: |
+        建立 Server-Sent Events 长连接，接收三类实时推送：
+        - **发言流式输出**：AI 逐 token 生成发言时持续推送 `speech.chunk`，完成时推送 `speech.complete`
+        - **共识更新**：每次新发言触发共识分析后推送 `consensus.update`
+        - **分歧更新**：每次新发言触发分歧分析后推送 `divergence.update`
+
+        **使用方式**：前端通过 `EventSource` 或 `fetch` + `ReadableStream` 连接此端点。
+        业务事件（触发下一轮发言）通过 POST `/speeches/next` 发起，
+        其结果**通过本 SSE 连接异步推送**，不在 POST 响应中直接返回。
+
+        **心跳**：15 秒无业务事件时发送 `event: heartbeat`，前端可用作连接存活检测。
+      operationId: streamEvents
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+        - name: after_sequence
+          in: query
+          schema:
+            type: integer
+          description: 断线重连时传入最后收到的 speech sequence_num，服务端从该位置之后开始补推
+          example: 15
+      responses:
+        "200":
+          description: SSE 流（text/event-stream）
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                speechChunk:
+                  summary: 发言流式 token
+                  value: |
+                    event: speech.chunk
+                    data: {"sequence_num":13,"panelist_id":103,"delta":"我同意张教授"}
+
+                    event: speech.chunk
+                    data: {"sequence_num":13,"panelist_id":103,"delta":"关于安全底线的判断，但立法"}
+
+                    event: speech.chunk
+                    data: {"sequence_num":13,"panelist_id":103,"delta":"需要分阶段推进，不能一刀切。"}
+                speechComplete:
+                  summary: 发言完成
+                  value: |
+                    event: speech.complete
+                    data: {"id":1013,"discussion_id":42,"panelist_id":103,"panelist_name":"王敏","panelist_color":"#2ECC71","content":"我同意张教授关于安全底线的判断，但立法需要分阶段推进，不能一刀切。建议先在高风险领域试点强制标准，低风险领域保持行业自律。","sequence_num":13,"created_at":"2026-07-05T14:50:00+08:00"}
+                consensusUpdate:
+                  summary: 共识更新
+                  value: |
+                    event: consensus.update
+                    data: {"id":3,"discussion_id":42,"topic":"同意分阶段监管","content":"张维德、王敏、李思远一致认为监管应分阶段推进：高风险AI系统先行立法，低风险领域给予行业缓冲期。","latest_speech_id":1013,"created_at":"2026-07-05T14:50:02+08:00","updated_at":"2026-07-05T14:50:02+08:00"}
+                divergenceUpdate:
+                  summary: 分歧更新
+                  value: |
+                    event: divergence.update
+                    data: {"id":2,"discussion_id":42,"topic":"缓冲期长短","content":"王敏主张3年试点期，陈浩然认为1年足够——双方对行业适应速度判断不同。","sides":"3年试点派：王敏、张维德 / 1年足够派：陈浩然、李思远","latest_speech_id":1013,"created_at":"2026-07-05T14:40:00+08:00","updated_at":"2026-07-05T14:50:03+08:00"}
+                error:
+                  summary: 流内错误
+                  value: |
+                    event: error
+                    data: {"code":"AI_GENERATION_FAILED","message":"DeepSeek 生成发言超时，请重试"}
+                heartbeat:
+                  summary: 心跳
+                  value: |
+                    event: heartbeat
+                    data: {}
+        "404":
+          description: 讨论不存在
+
+  /discussions/{discussion_id}/speeches:
+    get:
+      tags: [Streaming]
+      summary: 查询历史发言
+      description: 分页获取发言记录，按 sequence_num 升序。用于初次加载历史或 SSE 断线后补拉。
+      operationId: listSpeeches
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+        - name: after_sequence
+          in: query
+          schema:
+            type: integer
+          description: 从指定序号之后开始（不含），用于增量拉取
+          example: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpeechListResponse"
+        "404":
+          description: 讨论不存在
+
+  /discussions/{discussion_id}/speeches/next:
+    post:
+      tags: [Streaming]
+      summary: 触发下一轮 AI 发言
+      description: |
+        请求后端调用 DeepSeek 生成下一位嘉宾的发言。发言内容**不在此 POST 响应中返回**，
+        而是通过 SSE（`GET /stream`）异步推送 `speech.chunk` + `speech.complete`，
+        并在发言生成后自动分析共识/分歧，推送后续事件。
+
+        **并发控制**：同一讨论同一时间只允许一个正在生成的发言；重复调用返回 409。
+      operationId: triggerNextSpeech
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpeechNextRequest"
+            example:
+              prompt_hint: "请嘉宾针对监管成本问题发表看法"
+      responses:
+        "202":
+          description: |
+            已接受请求，发言正在生成中。结果通过 SSE 异步推送。
+            返回体中 `estimated_seconds` 为预估生成耗时。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, message]
+                properties:
+                  accepted:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "发言生成已启动，请通过 SSE 流获取内容"
+                  estimated_seconds:
+                    type: number
+                    example: 3.5
+        "400":
+          description: 讨论状态不允许发言（如已结束）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                discussion_completed:
+                  summary: 讨论已结束
+                  value:
+                    code: "DISCUSSION_COMPLETED"
+                    message: "讨论已结束，无法继续发言"
+                no_panelists:
+                  summary: 无嘉宾
+                  value:
+                    code: "NO_PANELISTS"
+                    message: "请先生成嘉宾阵容再开始讨论"
+                host_only:
+                  summary: 仅有主持人
+                  value:
+                    code: "NO_EXPERTS"
+                    message: "至少需要一位专家嘉宾才能开始讨论"
+        "404":
+          description: 讨论不存在
+        "409":
+          description: 已有发言生成中
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "SPEECH_IN_PROGRESS"
+                message: "当前已有发言正在生成中，请等待完成后再触发"
+        "502":
+          description: DeepSeek 调用失败（生成尚未启动）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ==========================================================
+  # 4. 共识 & 分歧查询
+  # ==========================================================
+  /discussions/{discussion_id}/consensus:
+    get:
+      tags: [Consensus & Divergence]
+      summary: 查询共识列表
+      description: 按更新时间倒序返回所有共识点。共识随发言实时生成，不等整场结束。
+      operationId: listConsensus
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsensusListResponse"
+              example:
+                items:
+                  - id: 3
+                    discussion_id: 42
+                    topic: "同意分阶段监管"
+                    content: "各方一致认为高风险AI系统应先立法，低风险领域给予行业缓冲期。"
+                    latest_speech_id: 1013
+                    created_at: "2026-07-05T14:50:02+08:00"
+                    updated_at: "2026-07-05T14:50:02+08:00"
+                  - id: 2
+                    discussion_id: 42
+                    topic: "AI 安全是共同前提"
+                    content: "全体嘉宾认同无论何种监管模式，安全是不可退让的底线。"
+                    latest_speech_id: 1008
+                    created_at: "2026-07-05T14:40:00+08:00"
+                    updated_at: "2026-07-05T14:45:00+08:00"
+                  - id: 1
+                    discussion_id: 42
+                    topic: "需要建立 AI 安全评估框架"
+                    content: "张维德与李思远一致同意需建立统一的AI安全评估标准，作为后续讨论基础。"
+                    latest_speech_id: 1004
+                    created_at: "2026-07-05T14:35:00+08:00"
+                    updated_at: "2026-07-05T14:35:00+08:00"
+                total: 3
+        "404":
+          description: 讨论不存在
+
+  /discussions/{discussion_id}/divergence:
+    get:
+      tags: [Consensus & Divergence]
+      summary: 查询分歧列表
+      description: 按更新时间倒序返回所有分歧点。分歧随发言实时追踪，不等整场结束。
+      operationId: listDivergence
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DivergenceListResponse"
+              example:
+                items:
+                  - id: 2
+                    discussion_id: 42
+                    topic: "缓冲期长短"
+                    content: "王敏主张3年试点期，陈浩然认为1年足够——双方对行业适应速度判断不同。"
+                    sides: "3年试点派：王敏、张维德 / 1年足够派：陈浩然、李思远"
+                    latest_speech_id: 1013
+                    created_at: "2026-07-05T14:40:00+08:00"
+                    updated_at: "2026-07-05T14:50:03+08:00"
+                  - id: 1
+                    discussion_id: 42
+                    topic: "监管手段：立法 vs 自律"
+                    content: "张维德主张通过立法建立强制标准，李思远认为行业自律更灵活高效。"
+                    sides: "立法派：张维德、王敏 / 自律派：李思远、陈浩然"
+                    latest_speech_id: 1005
+                    created_at: "2026-07-05T14:35:00+08:00"
+                    updated_at: "2026-07-05T14:42:00+08:00"
+                total: 2
+        "404":
+          description: 讨论不存在
+
+  # ==========================================================
+  # 5. 收尾总结
+  # ==========================================================
+  /discussions/{discussion_id}/summary:
+    get:
+      tags: [Summary]
+      summary: 查询已有总结
+      description: 获取上次生成的总结。若从未生成过则返回 404。
+      operationId: getSummary
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummaryResponse"
+        "404":
+          description: 尚未生成总结
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "SUMMARY_NOT_FOUND"
+                message: "该讨论尚未生成总结，请先调用 POST 生成"
+
+    post:
+      tags: [Summary]
+      summary: 生成收尾总结
+      description: |
+        调用 DeepSeek 基于全部发言、共识、分歧生成 Markdown 格式的讨论总结。
+        生成后讨论状态自动变更为 `completed`。幂等设计：再次调用会基于最新数据重新生成并覆盖旧总结。
+      operationId: generateSummary
+      parameters:
+        - $ref: "#/components/parameters/DiscussionIdPath"
+      responses:
+        "200":
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummaryResponse"
+        "400":
+          description: 讨论无发言数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "NO_SPEECHES"
+                message: "该讨论尚无任何发言，无法生成总结"
+        "404":
+          description: 讨论不存在
+        "502":
+          description: DeepSeek 调用失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "AI_SERVICE_UNAVAILABLE"
+                message: "DeepSeek 服务暂时不可用，请稍后重试"
+
+# ============================================================
+# 全局错误码汇总（附录）
+# ============================================================
+# 用 x- 扩展字段记录非规范性信息
+x-error-codes:
+  description: 所有可能的错误码一览
+  codes:
+    VALIDATION_ERROR:
+      status: 400
+      message: 请求参数格式或取值不合法
+    DISCUSSION_NOT_FOUND:
+      status: 404
+      message: 讨论会话不存在
+    PANELIST_NOT_FOUND:
+      status: 404
+      message: 嘉宾不存在或不属于该讨论
+    SUMMARY_NOT_FOUND:
+      status: 404
+      message: 总结尚未生成
+    BUSINESS_CONFLICT:
+      status: 400
+      message: 业务规则冲突（如重复主持人）
+    DISCUSSION_COMPLETED:
+      status: 400
+      message: 讨论已结束不可操作
+    NO_PANELISTS:
+      status: 400
+      message: 无嘉宾，先生成嘉宾阵容
+    NO_EXPERTS:
+      status: 400
+      message: 至少需要一位专家嘉宾
+    NO_SPEECHES:
+      status: 400
+      message: 无发言数据
+    SPEECH_IN_PROGRESS:
+      status: 409
+      message: 已有发言生成中，请等待完成
+    AI_GENERATION_FAILED:
+      status: 502
+      message: DeepSeek 生成失败
+    AI_SERVICE_UNAVAILABLE:
+      status: 502
+      message: DeepSeek 服务不可用
+    INTERNAL_ERROR:
+      status: 500
+      message: 服务器内部错误
+
+x-sse-event-reference:
+  description: SSE 事件类型完整清单
+  events:
+    - event: speech.chunk
+      direction: server → client
+      trigger: AI 生成发言过程中，每产生一个 token
+      payload: SSEChunkPayload { sequence_num, delta, panelist_id? }
+    - event: speech.complete
+      direction: server → client
+      trigger: 一句完整发言生成完毕并入库存
+      payload: Speech (完整)
+    - event: consensus.update
+      direction: server → client
+      trigger: 新增或更新共识点
+      payload: ConsensusPoint (完整)
+    - event: divergence.update
+      direction: server → client
+      trigger: 新增或更新分歧点
+      payload: DivergencePoint (完整)
+    - event: error
+      direction: server → client
+      trigger: 流内异常（生成失败、超时等）
+      payload: SSEErrorPayload { code, message }
+    - event: heartbeat
+      direction: server → client
+      trigger: 15 秒无任何业务事件
+      payload: "{}"
